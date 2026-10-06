@@ -32,8 +32,29 @@
  * degrades to the no-op stub at the bottom of this file. */
 #if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
 
+#include <objc/runtime.h>
+#include <objc/message.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_metal.h>
+
+/* MoltenVK's MVKSurface::getNaturalExtent calls -naturalDrawableSizeMVK,
+ * which exists only on CAMetalLayer. Handing it a plain CALayer raises
+ * NSInvalidArgumentException and kills the process, so reject anything that
+ * does not look like a Metal drawable before creating the surface. */
+static bool
+ios_layer_is_metal_drawable(void *layer)
+{
+   if (!layer)
+      return false;
+   id obj = (id)layer;
+   SEL sel = sel_registerName("naturalDrawableSizeMVK");
+   if (![obj respondsToSelector:sel])
+      return false;
+   /* Require the class chain too, so a lookalike object with a stray
+    * selector cannot slip through. */
+   Class metal = objc_getClass("CAMetalLayer");
+   return metal ? [obj isKindOfClass:metal] : true;
+}
 
 static simple_mtx_t present_lock = SIMPLE_MTX_INITIALIZER;
 static void *present_layer;
@@ -73,6 +94,18 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
       return false;
    if (!pscreen || !pctx || !pres || !metal_layer || !w || !h)
       return false;
+   /* A plain CALayer here means the app's view is not CAMetalLayer-backed
+    * (or was created before the kopper switch was read). MoltenVK would
+    * throw on it; fall back to the readback path instead. */
+   if (!ios_layer_is_metal_drawable(metal_layer)) {
+      static bool warned;
+      if (!warned) {
+         warned = true;
+         mesa_loge("ZINK: kopper present: drawable %p is not CAMetalLayer-backed, "
+                   "skipping kopper (falling back to readback)", metal_layer);
+      }
+      return false;
+   }
    /* OSMesa front buffers are RECT textures. */
    if ((pres->target != PIPE_TEXTURE_2D && pres->target != PIPE_TEXTURE_RECT) ||
        pres->nr_samples > 1)
