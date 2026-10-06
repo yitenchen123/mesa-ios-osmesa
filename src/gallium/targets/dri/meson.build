@@ -17,6 +17,13 @@ gallium_dri_drivers = []
 gallium_dri_link_with = []
 gallium_dri_link_whole = []
 
+# Export the public gl* entry points (see the libgallium_dri target below).
+# libglapi_bridge is built with MAPI_TMP_PUBLIC_ENTRIES_NO_HIDDEN and defines
+# every gl* function; libglapi is only the runtime dispatch table and exports
+# nothing. Linking the bridge whole is what makes the driver dylib a drop-in
+# GL provider for LWJGL's dlsym, exactly as libosmesa does.
+gallium_dri_link_whole += [libglapi_bridge]
+
 if with_gallium_va
   gallium_dri_link_with += [libgalliumvlwinsys]
   gallium_dri_link_whole += [libva_st]
