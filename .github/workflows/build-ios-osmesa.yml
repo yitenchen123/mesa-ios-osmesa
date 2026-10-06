@@ -317,16 +317,22 @@ jobs:
           # could not be found". Mithril/MobileGL work because their dylibs are
           # self-contained the same way.
           GALLIUM=dist/libgallium-26.3.0-devel.dylib
+          # Rename the plain EGL image to libEGL.1.dylib (its own install name)
+          # so the merged image can take the libEGL.dylib slot. The launcher's
+          # renderer preference already stores "libEGL.dylib", so the merged
+          # image must live at that exact path - a new file name would be
+          # ignored by existing profiles.
+          mv dist/libEGL.dylib dist/libEGL.1.dylib
           if [ -e "$GALLIUM" ]; then
             xcrun -sdk iphoneos ld -dylib \
               -arch arm64 \
               -platform_version ios 14.0 18.0 \
-              -install_name @rpath/libEGLkopper.dylib \
-              -reexport_library dist/libEGL.dylib \
+              -install_name @rpath/libEGL.dylib \
+              -reexport_library dist/libEGL.1.dylib \
               -reexport_library "$GALLIUM" \
-              -o dist/libEGLkopper.dylib || {
+              -o dist/libEGL.dylib || {
                 echo "::warning::ld -reexport_library merge failed; shipping split dylibs"
-                cp -L dist/libEGL.dylib dist/libEGLkopper.dylib
+                cp -L dist/libEGL.1.dylib dist/libEGL.dylib
               }
           fi
           ls -la dist
@@ -336,15 +342,14 @@ jobs:
           set -eux
           # Hard assertions: these must exist or the kopper bring-up is broken.
           test -e dist/libEGL.dylib
+          test -e dist/libEGL.1.dylib
           test -e dist/libgallium-26.3.0-devel.dylib
-          # The merged entry point must expose BOTH egl* and gl* symbols, or
-          # LWJGL cannot create GL capabilities through it.
-          test -e dist/libEGLkopper.dylib
-          echo "--- libEGLkopper: egl* entry points ---"
-          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -E '_eglGetPlatformDisplay|_eglCreateWindowSurface|_eglSwapBuffers' || true
-          echo "--- libEGLkopper: gl* entry points ---"
-          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -cE '_gl[A-Z]' | sed 's/^/gl* symbol count: /'
-          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -E '_glCreateShader|_glGetString|_glDrawElements' || true
+          # The entry point must re-export BOTH families, or LWJGL cannot create
+          # GL capabilities through the single image it is handed.
+          echo "--- libEGL.dylib: re-exported dylibs ---"
+          otool -L dist/libEGL.dylib | sed -n '2,6p'
+          echo "--- libEGL.dylib: load commands ---"
+          otool -l dist/libEGL.dylib | grep -A2 -E 'LC_REEXPORT_DYLIB' | head -20
           echo "--- driver contents ---"
           strings dist/libgallium-26.3.0-devel.dylib | grep -E 'VK_EXT_metal_surface|CreateMetalSurfaceEXT|kopper' | sort -u | head -n 20 || true
           echo "EGL/Kopper artifact verification passed"
