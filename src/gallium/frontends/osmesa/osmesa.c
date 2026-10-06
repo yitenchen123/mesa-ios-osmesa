@@ -357,22 +357,37 @@ osmesa_st_framebuffer_flush_front(struct st_context *st,
    if (statt != ST_ATTACHMENT_FRONT_LEFT)
       return false;
 
-   /* Unilateral Kopper present (v1 validation: present attempt is observed
-    * via logs, the normal readback copy below always runs). */
+   /* Unilateral Kopper present.
+    *
+    * AMETHYST_KOPPER_PRESENT=1 -> present through the CAMetalLayer-backed
+    * Vulkan swapchain and, when that succeeds, return without the readback
+    * copy: the frame is already on screen, and copying the colour buffer
+    * back to the app's CPU buffer is the GPU->CPU->GPU round-trip kopper
+    * removes. On failure we fall through to the readback, so the OSMesa
+    * path is never regressed.
+    *
+    * AMETHYST_KOPPER_PRESENT=2 -> as above but never read back (debug).
+    */
    extern void *osmesa_kopper_find_layer(void);
    extern bool zink_kopper_present_ios(struct pipe_screen *pscreen,
                                        struct pipe_context *pctx,
                                        struct pipe_resource *pres,
                                        unsigned w, unsigned h,
                                        void *metal_layer);
-   if (getenv("AMETHYST_KOPPER_PRESENT")) {
+   const char *kopper_env = getenv("AMETHYST_KOPPER_PRESENT");
+   if (kopper_env && kopper_env[0] && kopper_env[0] != '0') {
       void *layer = osmesa_kopper_find_layer();
       if (layer) {
          struct pipe_screen *fscreen = get_st_manager()->screen;
-         (void)zink_kopper_present_ios(fscreen, st->pipe, res,
-                                       osbuffer->width, osbuffer->height,
-                                       layer);
+         if (zink_kopper_present_ios(fscreen, st->pipe, res,
+                                     osbuffer->width, osbuffer->height,
+                                     layer)) {
+            /* Frame is on screen; skip the readback round-trip. */
+            return true;
+         }
       }
+      if (kopper_env[0] == '2')
+         return true;
    }
 
    /* Snapshot the color buffer to the user's buffer. */
