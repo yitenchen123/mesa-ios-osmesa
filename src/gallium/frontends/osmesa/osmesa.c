@@ -344,7 +344,11 @@ drawable_to_osbuffer(struct pipe_frontend_drawable *drawable)
  * CGImage; false means the readback path produced the frame. */
 bool osmesa_kopper_present_ok;
 
-/* Exported for the app (dlsym), like the other kopper hooks. */
+/* Exported for the app (dlsym), like the other kopper hooks. Declared here
+ * because Mesa builds with -Werror -Wmissing-prototypes. */
+__attribute__((visibility("default")))
+bool osmesa_kopper_present_ok_get(void);
+
 __attribute__((visibility("default")))
 bool
 osmesa_kopper_present_ok_get(void)
