@@ -26,6 +26,12 @@
 #include "util/u_memory.h"
 #include <stdbool.h>
 #include <stdlib.h>
+
+/* This translation unit is only built for Apple (Metal) targets. The zink
+ * meson source list includes it unconditionally, so on every other host it
+ * degrades to the no-op stub at the bottom of this file. */
+#if defined(__APPLE__) && defined(VK_USE_PLATFORM_METAL_EXT)
+
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_metal.h>
 
@@ -398,3 +404,18 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
    simple_mtx_unlock(&present_lock);
    return ok;
 }
+
+#else /* !(__APPLE__ && VK_USE_PLATFORM_METAL_EXT) */
+
+/* Non-Apple hosts: kopper unilateral present is unavailable. The caller
+ * always falls back to the OSMesa readback path when this returns false. */
+bool
+zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
+                        struct pipe_resource *pres, unsigned w, unsigned h,
+                        void *metal_layer)
+{
+   (void)pscreen; (void)pctx; (void)pres; (void)w; (void)h; (void)metal_layer;
+   return false;
+}
+
+#endif /* __APPLE__ && VK_USE_PLATFORM_METAL_EXT */
