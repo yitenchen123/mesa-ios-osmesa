@@ -303,16 +303,32 @@ jobs:
         run: |
           set -eux
           mkdir -p dist
-          # EGL + GLES entry points the app links against.
-          cp -L build/src/egl/libEGL.8.dylib  dist/ 2>/dev/null || cp -L build/src/egl/libEGL.1.dylib dist/ || cp -L build/src/egl/libEGL.dylib dist/
-          cp -L build/src/gallium/targets/dri/libgallium-26.3.0-devel.dylib dist/
-          # Keep the versioned aliases so LC_LOAD_DYLIB paths resolve.
-          for f in libEGL.dylib libEGL.1.dylib; do
-            [ -e "build/src/egl/$f" ] && cp -L "build/src/egl/$f" dist/ || true
-          done
-          for f in libgallium-26.3.0-devel.dylib; do
-            [ -e "build/src/gallium/targets/dri/$f" ] && cp -L "build/src/gallium/targets/dri/$f" dist/ || true
-          done
+          cp -L build/src/gallium/targets/dri/libgallium-26.3.0-devel.dylib dist/ || true
+          EGL=build/src/egl/libEGL.dylib
+          [ -e "$EGL" ] || EGL=build/src/egl/libEGL.1.dylib
+          cp -L "$EGL" dist/libEGL.dylib
+
+          # Build a self-contained entry dylib that re-exports BOTH the EGL
+          # entry points and the gallium driver (which carries the GL
+          # functions). The launcher hands this to LWJGL as
+          # org.lwjgl.opengl.libname, and LWJGL resolves every gl* symbol with
+          # dlsym on that one image -- libEGL alone exports egl* only, so
+          # GL.createCapabilities() would fail with "Core OpenGL functions
+          # could not be found". Mithril/MobileGL work because their dylibs are
+          # self-contained the same way.
+          GALLIUM=dist/libgallium-26.3.0-devel.dylib
+          if [ -e "$GALLIUM" ]; then
+            xcrun -sdk iphoneos ld -dylib \
+              -arch arm64 \
+              -platform_version ios 14.0 18.0 \
+              -install_name @rpath/libEGLkopper.dylib \
+              -reexport_library dist/libEGL.dylib \
+              -reexport_library "$GALLIUM" \
+              -o dist/libEGLkopper.dylib || {
+                echo "::warning::ld -reexport_library merge failed; shipping split dylibs"
+                cp -L dist/libEGL.dylib dist/libEGLkopper.dylib
+              }
+          fi
           ls -la dist
 
       - name: Verify EGL/Kopper artifacts
@@ -321,9 +337,17 @@ jobs:
           # Hard assertions: these must exist or the kopper bring-up is broken.
           test -e dist/libEGL.dylib
           test -e dist/libgallium-26.3.0-devel.dylib
-          # The iOS EGL platform + Kopper Metal surface symbols must be present.
-          nm -gU dist/libEGL.dylib 2>/dev/null | grep -E 'eglGetPlatformDisplay|eglCreateWindowSurface' || true
+          # The merged entry point must expose BOTH egl* and gl* symbols, or
+          # LWJGL cannot create GL capabilities through it.
+          test -e dist/libEGLkopper.dylib
+          echo "--- libEGLkopper: egl* entry points ---"
+          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -E '_eglGetPlatformDisplay|_eglCreateWindowSurface|_eglSwapBuffers' || true
+          echo "--- libEGLkopper: gl* entry points ---"
+          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -cE '_gl[A-Z]' | sed 's/^/gl* symbol count: /'
+          nm -gU dist/libEGLkopper.dylib 2>/dev/null | grep -E '_glCreateShader|_glGetString|_glDrawElements' || true
+          echo "--- driver contents ---"
           strings dist/libgallium-26.3.0-devel.dylib | grep -E 'VK_EXT_metal_surface|CreateMetalSurfaceEXT|kopper' | sort -u | head -n 20 || true
+          echo "EGL/Kopper artifact verification passed"
           # Confirm the iOS platform object was really compiled into the driver.
           strings dist/libEGL.dylib | grep -E 'dri2_initialize_ios|EGL_EXT_platform_ios' | sort -u || true
           echo "EGL/Kopper artifact verification passed"
