@@ -245,22 +245,24 @@ dri2_ios_add_configs_for_visuals(_EGLDisplay *disp)
    unsigned int i, j;
 
    /* Try to create an EGLConfig for every config the driver declares,
-    * for every native visual (RGBA first so choosers prefer it). */
+    * for every native visual (RGBA first so choosers prefer it).
+    *
+    * EGL_WINDOW_BIT|EGL_PBUFFER_BIT: eglChooseConfig requires the requested
+    * surface type to be a subset of the config's, so advertising window-only
+    * made every request that also wanted a pbuffer (the launcher's, and
+    * zink's offscreen FBO work) match nothing and fail. These configs back
+    * both kinds of surface on iOS. */
    for (i = 0; i < ARRAY_SIZE(dri2_ios_visuals); i++) {
       for (j = 0; dri2_dpy->driver_configs[j]; j++) {
          struct dri2_egl_config *dri2_conf;
-         const struct gl_config *gl_config =
-            (const struct gl_config *)dri2_dpy->driver_configs[j];
          EGLint attr_list[] = {
             EGL_NATIVE_VISUAL_ID, dri2_ios_visuals[i].visual_id,
             EGL_NONE,
          };
 
-         /* Match driver configs offering this visual's channel layout.
-          * Reuse the pipe format of the visual directly. */
-         (void)gl_config;
          dri2_conf = dri2_add_config(disp, dri2_dpy->driver_configs[j],
-                                     EGL_WINDOW_BIT, attr_list);
+                                     EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+                                     attr_list);
          if (!dri2_conf)
             continue;
       }
