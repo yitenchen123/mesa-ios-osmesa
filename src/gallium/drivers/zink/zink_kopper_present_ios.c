@@ -67,7 +67,9 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
       return false;
    if (!pscreen || !pctx || !pres || !metal_layer || !w || !h)
       return false;
-   if (pres->target != PIPE_TEXTURE_2D || pres->nr_samples > 1)
+   /* OSMesa front buffers are RECT textures. */
+   if ((pres->target != PIPE_TEXTURE_2D && pres->target != PIPE_TEXTURE_RECT) ||
+       pres->nr_samples > 1)
       return false;
 
    struct zink_screen *screen = zink_screen(pscreen);
@@ -75,9 +77,10 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
    if (!res || !res->obj || !res->obj->image)
       return false;
 
-   /* Source must be blittable RGBA8 for v1 (matches OSMesa visuals). */
+   /* Source must be blittable 8-bit RGBA in either byte order. */
    VkFormat src_format = zink_get_format(screen, pres->format);
-   if (src_format != VK_FORMAT_R8G8B8A8_UNORM)
+   if (src_format != VK_FORMAT_R8G8B8A8_UNORM &&
+       src_format != VK_FORMAT_B8G8R8A8_UNORM)
       return false;
 
    simple_mtx_lock(&present_lock);
