@@ -65,6 +65,9 @@ static VkFormat present_format;
 static VkImage present_images[8];
 static uint32_t present_image_count;
 static VkCommandPool present_pool;
+/* Set when this surface/device cannot support kopper, so we stop rebuilding
+ * the swapchain on every frame and log-spamming while the game runs. */
+static bool present_unsupported;
 
 static void
 present_teardown(struct zink_screen *screen)
@@ -97,6 +100,8 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
    /* A plain CALayer here means the app's view is not CAMetalLayer-backed
     * (or was created before the kopper switch was read). MoltenVK would
     * throw on it; fall back to the readback path instead. */
+   if (present_unsupported)
+      return false;
    if (!ios_layer_is_metal_drawable(metal_layer)) {
       static bool warned;
       if (!warned) {
@@ -173,20 +178,47 @@ zink_kopper_present_ios(struct pipe_screen *pscreen, struct pipe_context *pctx,
       return false;
    }
    VKSCR(GetPhysicalDeviceSurfaceFormatsKHR)(screen->pdev, present_surface, &fmt_count, fmts);
+   /* MoltenVK surfaces usually report B8G8R8A8_UNORM (Metal BGRA8Unorm)
+    * rather than R8G8B8A8_UNORM, so accept either byte order. Prefer the one
+    * matching the source format, which keeps the blit a straight copy. */
    VkFormat swap_format = VK_FORMAT_UNDEFINED;
    for (uint32_t i = 0; i < fmt_count; i++) {
-      if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) {
+      if (fmts[i].format != VK_FORMAT_R8G8B8A8_UNORM &&
+          fmts[i].format != VK_FORMAT_B8G8R8A8_UNORM)
+         continue;
+      if (fmts[i].format == src_format) {
          swap_format = fmts[i].format;
          break;
       }
+      if (swap_format == VK_FORMAT_UNDEFINED)
+         swap_format = fmts[i].format;
    }
-   free(fmts);
    if (swap_format == VK_FORMAT_UNDEFINED) {
-      mesa_loge("ZINK: kopper present: no RGBA8 swapchain format");
-      present_teardown(screen);
+      /* Log the offered list once so the real capability set is visible in
+       * the device log rather than guessed at. */
+      static bool warned_fmt;
+      if (!warned_fmt) {
+         warned_fmt = true;
+         mesa_loge("ZINK: kopper present: no RGB8/BGR8 swapchain format "
+                   "(src fmt=%d, %u offered):", src_format, fmt_count);
+         for (uint32_t i = 0; i < fmt_count && i < 16; i++)
+            mesa_loge("ZINK: kopper present:   offered[%u] = %d (%s)",
+                      i, fmts[i].format,
+                      fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ?
+                      "SRGB_NONLINEAR" : "other");
+         mesa_loge("ZINK: kopper present: disabling kopper, using readback");
+      }
+      free(fmts);
+      /* Keep the surface (it is valid) and latch the failure so we do not
+       * rebuild it every frame. */
+      present_unsupported = true;
       simple_mtx_unlock(&present_lock);
       return false;
    }
+   free(fmts);
+   if (swap_format != src_format)
+      mesa_loge("ZINK: kopper present: src fmt=%d swap fmt=%d (byte swizzle)",
+                src_format, swap_format);
 
    VkExtent2D extent;
    if (caps.currentExtent.width != 0xFFFFFFFFu) {

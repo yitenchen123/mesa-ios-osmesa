@@ -339,6 +339,19 @@ drawable_to_osbuffer(struct pipe_frontend_drawable *drawable)
 }
 
 
+/* Whether the most recent flush presented through kopper. The app polls this
+ * (via the exported accessor below) to decide if it still needs to upload a
+ * CGImage; false means the readback path produced the frame. */
+bool osmesa_kopper_present_ok;
+
+/* Exported for the app (dlsym), like the other kopper hooks. */
+__attribute__((visibility("default")))
+bool
+osmesa_kopper_present_ok_get(void)
+{
+   return osmesa_kopper_present_ok;
+}
+
 /**
  * Called via glFlush/glFinish.  This is where we copy the contents
  * of the driver's color buffer into the user-specified buffer.
@@ -382,10 +395,14 @@ osmesa_st_framebuffer_flush_front(struct st_context *st,
          if (zink_kopper_present_ios(fscreen, st->pipe, res,
                                      osbuffer->width, osbuffer->height,
                                      layer)) {
-            /* Frame is on screen; skip the readback round-trip. */
+            /* Frame is on screen. Record it so the app knows it can skip its
+             * CGImage upload for this frame. */
+            osmesa_kopper_present_ok = true;
             return true;
          }
       }
+      /* Present did not happen: tell the app to upload a CGImage. */
+      osmesa_kopper_present_ok = false;
       if (kopper_env[0] == '2')
          return true;
    }
