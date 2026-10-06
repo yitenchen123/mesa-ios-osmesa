@@ -233,9 +233,15 @@ static const struct {
    int visual_id;
    enum pipe_format pipe_format;
 } dri2_ios_visuals[] = {
-   { 1, PIPE_FORMAT_RGBA8888_UNORM },
-   { 2, PIPE_FORMAT_RGBX8888_UNORM },
-   { 3, PIPE_FORMAT_B5G6R5_UNORM },
+   /* BGRA8 first: this becomes the EGLConfig the app receives, and kopper
+    * builds the swapchain's VkFormat from it. MoltenVK maps that to a
+    * CAMetalLayer pixel format, and iOS refuses MTLPixelFormatRGBA8Unorm
+    * (110) with 'CAMetalLayerInvalid' - Apple's supported layout is
+    * BGRA8Unorm. RGBA stays as a secondary visual. */
+   { 1, PIPE_FORMAT_B8G8R8A8_UNORM },
+   { 2, PIPE_FORMAT_R8G8B8A8_UNORM },
+   { 3, PIPE_FORMAT_RGBX8888_UNORM },
+   { 4, PIPE_FORMAT_B5G6R5_UNORM },
 };
 
 static void
@@ -255,10 +261,22 @@ dri2_ios_add_configs_for_visuals(_EGLDisplay *disp)
    for (i = 0; i < ARRAY_SIZE(dri2_ios_visuals); i++) {
       for (j = 0; dri2_dpy->driver_configs[j]; j++) {
          struct dri2_egl_config *dri2_conf;
+         const struct gl_config *gl_config =
+            (const struct gl_config *)dri2_dpy->driver_configs[j];
          EGLint attr_list[] = {
             EGL_NATIVE_VISUAL_ID, dri2_ios_visuals[i].visual_id,
             EGL_NONE,
          };
+
+         /* Only BGRA8 drawables are usable on iOS: the colour format chosen
+          * here flows down to the swapchain's VkFormat and then to
+          * CAMetalLayer.pixelFormat, and CAMetalLayer refuses
+          * MTLPixelFormatRGBA8Unorm (110) with 'CAMetalLayerInvalid'.
+          * Filtering here stops eglChooseConfig from handing out a config
+          * that cannot be presented. */
+         if (gl_config->color_format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+             gl_config->color_format != PIPE_FORMAT_B8G8R8X8_UNORM)
+            continue;
 
          dri2_conf = dri2_add_config(disp, dri2_dpy->driver_configs[j],
                                      EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
