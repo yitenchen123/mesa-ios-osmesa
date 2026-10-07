@@ -30,6 +30,60 @@
 #include "zink_screen.h"
 #include "nir_to_spirv/nir_to_spirv.h"
 
+/* Metal Shading Language keywords/types that can also be used as GLSL
+ * identifiers. SPIRV-Cross derives the MSL parameter name from the GLSL
+ * variable name, so a variable called `sampler` (as Iris uses) produces
+ *
+ *     texture2d<float> sampler [[texture(0)]], sampler samplerSmplr ...
+ *
+ * where the parameter shadows the `sampler` type and the Metal compiler
+ * rejects the signature. Rename such variables before SPIR-V is emitted so
+ * the clash never reaches SPIRV-Cross.
+ *
+ * Only identifiers change; bindings, types and semantics are untouched.
+ */
+static const char *const msl_reserved_names[] = {
+   /* types and address-space qualifiers */
+   "sampler", "texture", "texture2d", "texture3d", "texturecube",
+   "texture2d_array", "texturecube_array", "depth2d", "depthcube",
+   "struct", "union", "enum", "class", "typename",
+   "bool", "char", "uchar", "short", "ushort", "int", "uint", "long", "ulong",
+   "half", "float", "size_t", "ptrdiff_t", "void",
+   /* qualifiers and attributes */
+   "const", "constexpr", "static", "extern", "inline", "template",
+   "thread", "threadgroup", "device", "constant", "ray_data",
+   "vertex", "fragment", "kernel", "stage_in", "stage_out",
+   "patch", "patch_control_point",
+   /* statements */
+   "if", "else", "for", "while", "do", "switch", "case", "default",
+   "break", "continue", "return", "discard", "using", "namespace",
+   "operator", "new", "delete", "try", "catch", "throw", "asm",
+   "vector", "matrix", "array", "main",
+};
+
+static bool
+msl_name_is_reserved(const char *name)
+{
+   if (!name)
+      return false;
+   for (unsigned i = 0; i < ARRAY_SIZE(msl_reserved_names); i++) {
+      if (strcmp(name, msl_reserved_names[i]) == 0)
+         return true;
+   }
+   return false;
+}
+
+static void
+rename_msl_keyword_variables(nir_shader *nir)
+{
+   nir_foreach_variable_in_shader(var, nir) {
+      if (!var->name || !msl_name_is_reserved(var->name))
+         continue;
+      char *new_name = ralloc_asprintf(nir, "%s_zmvk", var->name);
+      nir_variable_set_name(nir, var, new_name);
+   }
+}
+
 #include "pipe/p_state.h"
 
 #include "nir.h"
@@ -4099,6 +4153,7 @@ compile_module(struct zink_screen *screen, struct zink_shader *zs, nir_shader *n
    }
 
    struct zink_shader_object obj = {0};
+   rename_msl_keyword_variables(nir);
    struct spirv_shader *spirv = nir_to_spirv(nir, &screen->ntv_info);
    if (spirv)
       obj = zink_shader_spirv_compile(screen, zs, spirv, can_shobj, pg);
