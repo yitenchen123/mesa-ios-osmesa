@@ -39,6 +39,12 @@ zink_kopper_set_present_mode_for_interval(struct kopper_displaytarget *cdt, int 
 #else
    assert(interval >= 0); /* TODO: VK_PRESENT_MODE_FIFO_RELAXED_KHR */
    if (interval == 0) {
+      /* Metal (iOS): prefer IMMEDIATE when the driver offers it. MoltenVK
+       * maps MAILBOX onto a Metal drawable queue that still paces to the
+       * display, which on some devices halves the frame rate instead of
+       * unlocking it. The check below already excludes WAYLAND (MAILBOX is
+       * deliberate there to avoid tearing artifacts); the same reasoning does
+       * not apply to a single-window Metal surface. */
       /* Many wayland EGL applications will set SwapInterval 0, and then
        * use frame callbacks to do their own pacing. These applications
        * don't want tearing artifacts.
